@@ -1,0 +1,45 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+input/
+output/
+*.svg
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+
+# Documentation
+*.md
+!requirements.txt
+
+# GitHub
+.github/
+!.github/workflows/docker-publish.yml

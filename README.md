@@ -12,12 +12,41 @@ Convert full-color images to SVGs with limited color palettes, perfect for 3D pr
 
 ## Installation
 
-### Prerequisites
+### Method 1: Docker (Recommended)
+
+The easiest way to use this tool is with Docker. No need to install Python or Potrace manually!
+
+**Using Docker Compose:**
+```bash
+# Pull the latest image
+docker-compose pull
+
+# Process an image (place files in ./input directory)
+docker-compose run --rm img2svg /app/input/photo.jpg /app/output/result.svg -c 8
+
+# Or build locally
+docker-compose build
+```
+
+**Using Docker directly:**
+```bash
+# Pull from GitHub Container Registry
+docker pull ghcr.io/depoll/img-to-printable-svg:latest
+
+# Run the converter
+docker run --rm -v $(pwd)/input:/app/input -v $(pwd)/output:/app/output \
+  ghcr.io/depoll/img-to-printable-svg:latest \
+  /app/input/photo.jpg /app/output/result.svg -c 8
+```
+
+### Method 2: Local Installation
+
+#### Prerequisites
 
 1. Python 3.8 or higher
 2. Potrace (for image to vector conversion)
 
-### Install Potrace
+#### Install Potrace
 
 **macOS:**
 ```bash
@@ -32,7 +61,7 @@ sudo apt-get install potrace
 **Windows:**
 Download from [Potrace website](http://potrace.sourceforge.net/)
 
-### Install Python Dependencies
+#### Install Python Dependencies
 
 ```bash
 pip install -r requirements.txt
@@ -45,7 +74,24 @@ pip install Pillow numpy scikit-learn
 
 ## Quick Start
 
-### Basic Image to SVG Conversion
+### Using Docker
+
+Create input and output directories:
+```bash
+mkdir -p input output
+```
+
+Place your images in the `input` directory, then run:
+```bash
+# Using docker-compose
+docker-compose run --rm img2svg /app/input/photo.jpg /app/output/result.svg -c 8
+
+# Or using docker directly
+docker run --rm -v $(pwd):/app/work ghcr.io/depoll/img-to-printable-svg:latest \
+  /app/work/input/photo.jpg /app/work/output/result.svg -c 8
+```
+
+### Using Local Installation
 
 Convert a photo to an 8-color SVG:
 ```bash

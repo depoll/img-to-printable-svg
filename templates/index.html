@@ -77,10 +77,56 @@
             background: #eef2ff;
         }
         
+        .upload-area.has-file {
+            padding: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: default;
+        }
+        
         .upload-icon {
             font-size: 48px;
             color: #cbd5e0;
             margin-bottom: 10px;
+        }
+        
+        .file-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex: 1;
+        }
+        
+        .file-icon {
+            font-size: 24px;
+            color: #667eea;
+        }
+        
+        .file-name {
+            color: #2d3748;
+            font-weight: 500;
+            font-size: 14px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+        }
+        
+        .clear-file-btn {
+            background: #ef4444;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            transition: background 0.3s;
+        }
+        
+        .clear-file-btn:hover {
+            background: #dc2626;
         }
         
         .control-group {
@@ -435,11 +481,13 @@
         <div class="main-panel">
             <div class="controls">
                 <div class="upload-area" id="uploadArea">
-                    <div class="upload-icon">📁</div>
-                    <p>Click to upload or drag & drop</p>
-                    <p style="font-size: 12px; color: #a0aec0; margin-top: 10px;">
-                        PNG, JPG, GIF, BMP, or SVG
-                    </p>
+                    <div class="upload-content" id="uploadContent">
+                        <div class="upload-icon">📁</div>
+                        <p>Click to upload or drag & drop</p>
+                        <p style="font-size: 12px; color: #a0aec0; margin-top: 10px;">
+                            PNG, JPG, GIF, BMP, or SVG
+                        </p>
+                    </div>
                     <input type="file" id="fileInput" accept="image/*,.svg" style="display: none;">
                 </div>
                 
@@ -472,6 +520,20 @@
                 <div class="checkbox-group">
                     <input type="checkbox" id="includeBackground">
                     <label for="includeBackground">Include background</label>
+                </div>
+                
+                <div class="control-group" id="svgOptions" style="display: none;">
+                    <label>Gradient Handling (SVG only)</label>
+                    <select id="gradientMode">
+                        <option value="default">Keep gradients as-is</option>
+                        <option value="sample">Sample gradient colors</option>
+                        <option value="remove">Remove gradients</option>
+                    </select>
+                    <div style="font-size: 12px; color: #718096; margin-top: 5px;">
+                        • Keep as-is: Preserve gradients unchanged<br>
+                        • Sample colors: Include gradient colors in quantization<br>
+                        • Remove: Convert gradients to solid colors
+                    </div>
                 </div>
                 
                 <div class="color-palette-section">
@@ -639,8 +701,14 @@
         // Add cursor style for color picking
         originalPreview.style.cursor = 'crosshair';
         
-        // File upload
-        uploadArea.addEventListener('click', () => fileInput.click());
+        // File upload - only trigger if not clicking the clear button
+        uploadArea.addEventListener('click', (e) => {
+            if (!e.target.classList.contains('clear-file-btn')) {
+                if (!currentFile) {
+                    fileInput.click();
+                }
+            }
+        });
         
         fileInput.addEventListener('change', (e) => {
             handleFile(e.target.files[0]);
@@ -671,6 +739,68 @@
             });
         });
         
+        function updateUploadArea(file) {
+            if (file) {
+                // Show compact file info
+                const uploadContent = document.getElementById('uploadContent');
+                uploadArea.classList.add('has-file');
+                
+                // Get file icon based on type
+                let fileIcon = '📄';
+                const ext = file.name.toLowerCase().split('.').pop();
+                if (['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'].includes(ext)) {
+                    fileIcon = '🖼️';
+                } else if (ext === 'svg') {
+                    fileIcon = '🎨';
+                }
+                
+                uploadContent.innerHTML = `
+                    <div class="file-info">
+                        <span class="file-icon">${fileIcon}</span>
+                        <span class="file-name">${file.name}</span>
+                    </div>
+                    <button class="clear-file-btn" onclick="clearFile()">Clear</button>
+                `;
+            } else {
+                // Reset to original state
+                uploadArea.classList.remove('has-file');
+                const uploadContent = document.getElementById('uploadContent');
+                uploadContent.innerHTML = `
+                    <div class="upload-icon">📁</div>
+                    <p>Click to upload or drag & drop</p>
+                    <p style="font-size: 12px; color: #a0aec0; margin-top: 10px;">
+                        PNG, JPG, GIF, BMP, or SVG
+                    </p>
+                `;
+            }
+        }
+        
+        function clearFile() {
+            currentFile = null;
+            currentSVG = null;
+            fileInput.value = '';
+            convertBtn.disabled = true;
+            downloadBtn.disabled = true;
+            
+            // Reset upload area
+            updateUploadArea(null);
+            
+            // Clear previews
+            originalPreview.src = '';
+            placeholder.style.display = 'flex';
+            resultContainer.innerHTML = '';
+            progressContainer.style.display = 'none';
+            
+            // Hide SVG options
+            document.getElementById('svgOptions').style.display = 'none';
+            
+            // Reset to original tab
+            showTab('original');
+        }
+        
+        // Make clearFile globally accessible
+        window.clearFile = clearFile;
+        
         function handleFile(file) {
             if (!file) return;
             
@@ -678,6 +808,17 @@
             convertBtn.disabled = false;
             downloadBtn.disabled = true;
             currentSVG = null;
+            
+            // Update upload area to show file info
+            updateUploadArea(file);
+            
+            // Show/hide SVG options based on file type
+            const svgOptions = document.getElementById('svgOptions');
+            if (file.name.toLowerCase().endsWith('.svg')) {
+                svgOptions.style.display = 'block';
+            } else {
+                svgOptions.style.display = 'none';
+            }
             
             // Show original preview
             const reader = new FileReader();
@@ -746,6 +887,11 @@
             formData.append('threshold', thresholdSlider.value);
             formData.append('simplify', document.getElementById('simplify').checked);
             formData.append('includeBackground', document.getElementById('includeBackground').checked);
+            
+            // Add gradient mode if it's an SVG file
+            if (currentFile.name.toLowerCase().endsWith('.svg')) {
+                formData.append('gradientMode', document.getElementById('gradientMode').value);
+            }
             
             // Add suggested colors as JSON
             const colorsHex = suggestedColors.map(c => c.replace('#', ''));

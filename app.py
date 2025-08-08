@@ -92,6 +92,7 @@ def convert():
     threshold = int(request.form.get('threshold', 128))
     simplify = request.form.get('simplify', 'true') == 'true'
     include_background = request.form.get('includeBackground', 'false') == 'true'
+    gradient_mode = request.form.get('gradientMode', 'default')  # default, sample, or remove
     
     # Get suggested colors if provided
     suggested_colors_json = request.form.get('suggestedColors', '[]')
@@ -146,7 +147,31 @@ def convert():
                     yield f"data: {json.dumps({'type': 'status', 'message': 'Processing SVG file...'})}\n\n"
                     # Process existing SVG
                     processor = SVGColorProcessor()
-                    processor.quantize_colors(input_path, output_path, n_colors)
+                    
+                    temp_path = input_path
+                    
+                    # Handle gradient mode
+                    if gradient_mode == 'remove':
+                        yield f"data: {json.dumps({'type': 'status', 'message': 'Removing gradients...'})}\n\n"
+                        with tempfile.NamedTemporaryFile(suffix='.svg', delete=False, dir=TEMP_DIR) as tmp:
+                            temp_output = tmp.name
+                        temp_path = processor.remove_gradients(temp_path, temp_output)
+                    
+                    # Quantize colors with gradient sampling if requested
+                    sample_gradients = (gradient_mode == 'sample')
+                    if sample_gradients:
+                        yield f"data: {json.dumps({'type': 'status', 'message': 'Quantizing colors (sampling gradients)...'})}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'type': 'status', 'message': 'Quantizing colors...'})}\n\n"
+                    
+                    processor.quantize_colors(temp_path, output_path, n_colors, sample_gradients=sample_gradients)
+                    
+                    # Clean up temp file if we created one for gradient removal
+                    if gradient_mode == 'remove' and temp_path != input_path:
+                        try:
+                            os.unlink(temp_path)
+                        except:
+                            pass
                 else:
                     yield f"data: {json.dumps({'type': 'status', 'message': 'Converting image to SVG...'})}\n\n"
                     if suggested_colors_rgb:

@@ -376,6 +376,50 @@ class SVGColorProcessor:
     """Process existing SVG files to reduce colors and remove gradients."""
     
     @staticmethod
+    def extract_gradient_colors(root):
+        """Extract all colors from gradients in an SVG."""
+        gradient_colors = []
+        
+        for elem in root.iter():
+            if 'linearGradient' in elem.tag or 'radialGradient' in elem.tag:
+                # Extract all stop colors from the gradient
+                for stop in elem:
+                    if 'stop' in stop.tag:
+                        stop_color = None
+                        stop_opacity = 1.0
+                        
+                        # Check stop-color attribute
+                        stop_color = stop.get('stop-color')
+                        
+                        # Check style attribute for stop-color
+                        style = stop.get('style', '')
+                        if style and not stop_color:
+                            match = re.search(r'stop-color:\s*([^;]+)', style)
+                            if match:
+                                stop_color = match.group(1)
+                        
+                        # Check for opacity
+                        stop_opacity_attr = stop.get('stop-opacity')
+                        if stop_opacity_attr:
+                            try:
+                                stop_opacity = float(stop_opacity_attr)
+                            except:
+                                pass
+                        elif style:
+                            match = re.search(r'stop-opacity:\s*([^;]+)', style)
+                            if match:
+                                try:
+                                    stop_opacity = float(match.group(1))
+                                except:
+                                    pass
+                        
+                        # Add color if found (skip if too transparent)
+                        if stop_color and stop_opacity > 0.1:
+                            gradient_colors.append(stop_color)
+        
+        return gradient_colors
+    
+    @staticmethod
     def remove_gradients(svg_path, output_path):
         """Convert gradients to solid colors in an SVG file."""
         tree = ET.parse(svg_path)
@@ -416,14 +460,35 @@ class SVGColorProcessor:
         return output_path
     
     @staticmethod
-    def quantize_colors(svg_path, output_path, n_colors=8):
-        """Reduce the number of colors in an SVG file."""
+    def quantize_colors(svg_path, output_path, n_colors=8, sample_gradients=False):
+        """Reduce the number of colors in an SVG file.
+        
+        Args:
+            svg_path: Input SVG file path
+            output_path: Output SVG file path
+            n_colors: Number of colors to quantize to
+            sample_gradients: If True, sample colors from gradients instead of removing them
+        """
         tree = ET.parse(svg_path)
         root = tree.getroot()
         
         # Extract all colors
         colors = set()
         color_pattern = re.compile(r'#[0-9a-fA-F]{3,6}')
+        
+        # Extract gradient colors if requested
+        if sample_gradients:
+            gradient_colors = SVGColorProcessor.extract_gradient_colors(root)
+            for gc in gradient_colors:
+                if gc and gc.startswith('#'):
+                    colors.add(gc)
+                elif gc and gc.startswith('rgb'):
+                    # Convert rgb() format to hex
+                    match = re.match(r'rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', gc)
+                    if match:
+                        r, g, b = map(int, match.groups())
+                        hex_color = '#{:02x}{:02x}{:02x}'.format(r, g, b)
+                        colors.add(hex_color)
         
         for elem in root.iter():
             for attr in ['fill', 'stroke', 'stop-color']:
@@ -520,6 +585,10 @@ def main():
         help='Remove gradients from SVG (for SVG input)'
     )
     parser.add_argument(
+        '--sample-gradients', action='store_true',
+        help='Sample colors from gradients for quantization instead of removing them (for SVG input)'
+    )
+    parser.add_argument(
         '--quantize-only', action='store_true',
         help='Only quantize colors in existing SVG (for SVG input)'
     )
@@ -544,13 +613,25 @@ def main():
         
         temp_path = input_path
         
+        # Handle mutually exclusive gradient options
+        if args.remove_gradients and args.sample_gradients:
+            print("Error: Cannot use both --remove-gradients and --sample-gradients")
+            sys.exit(1)
+        
         if args.remove_gradients:
             print("Removing gradients...")
             temp_output = output_path.with_suffix('.temp.svg')
             temp_path = processor.remove_gradients(temp_path, temp_output)
         
-        print(f"Quantizing to {args.colors} colors...")
-        processor.quantize_colors(temp_path, output_path, args.colors)
+        # Determine if we should sample gradients
+        sample_gradients = args.sample_gradients and not args.remove_gradients
+        
+        if sample_gradients:
+            print(f"Quantizing to {args.colors} colors (sampling gradient colors)...")
+        else:
+            print(f"Quantizing to {args.colors} colors...")
+        
+        processor.quantize_colors(temp_path, output_path, args.colors, sample_gradients=sample_gradients)
         
         if args.remove_gradients and temp_path != input_path:
             os.unlink(temp_path)
