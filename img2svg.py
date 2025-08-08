@@ -7,6 +7,7 @@ Converts raster images to SVGs with limited color palettes suitable for 3D print
 import argparse
 import sys
 import os
+import re
 from pathlib import Path
 from PIL import Image
 import numpy as np
@@ -15,17 +16,17 @@ from sklearn.cluster import KMeans
 import tempfile
 import subprocess
 import xml.etree.ElementTree as ET
-import re
 
 
 class ImageToSVGConverter:
     """Main converter class for image to printable SVG conversion."""
     
-    def __init__(self, n_colors=8, method='kmeans', simplify=True, threshold=128):
+    def __init__(self, n_colors=8, method='kmeans', simplify=True, threshold=128, include_background=False):
         self.n_colors = n_colors
         self.method = method
         self.simplify = simplify
         self.threshold = threshold
+        self.include_background = include_background
         self.palette = None
     
     def convert(self, input_path, output_path):
@@ -119,12 +120,12 @@ class ImageToSVGConverter:
         width, height = image.size
         svg_parts = []
         
-        # SVG header
+        # SVG header with white background
         svg_parts.append(f'''<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <svg width="{width}" height="{height}" 
      viewBox="0 0 {width} {height}"
      xmlns="http://www.w3.org/2000/svg">
-<g>''')
+<rect width="{width}" height="{height}" fill="white"/>''')
         
         # Process each color separately
         img_array = np.array(image)
@@ -135,6 +136,11 @@ class ImageToSVGConverter:
         for i, color in enumerate(unique_colors):
             print(f"  Processing color {i+1}/{len(unique_colors)}: RGB{tuple(color)}")
             
+            # Skip pure black (background) if not including background
+            if not self.include_background and np.array_equal(color, [0, 0, 0]):
+                print("    Skipping black background")
+                continue
+            
             # Create binary mask for this color
             mask = np.all(img_array == color, axis=2)
             
@@ -143,14 +149,41 @@ class ImageToSVGConverter:
                 continue
             
             # Convert to path using potrace
-            path_data = self.trace_bitmap(mask)
+            result = self.trace_bitmap(mask)
             
-            if path_data:
+            if result:
                 hex_color = '#{:02x}{:02x}{:02x}'.format(*color)
-                svg_parts.append(f'  <path d="{path_data}" fill="{hex_color}" />')
+                transform = result.get('transform', '')
+                paths = result.get('paths', '')
+                
+                if paths:
+                    # Potrace outputs with viewBox "0 0 19200 19200" and transform "translate(0,1920) scale(0.1,-0.1)"
+                    # This means coordinates are in 1/10 points. We need to scale to our pixel space.
+                    viewbox = result.get('viewbox', None)
+                    
+                    if viewbox and len(viewbox) >= 4:
+                        # Get potrace's coordinate space dimensions
+                        potrace_width = float(viewbox[2])
+                        potrace_height = float(viewbox[3])
+                        
+                        # Calculate scale to fit our canvas
+                        scale_x = width / potrace_width
+                        scale_y = height / potrace_height
+                        
+                        # Apply both potrace's transform and our scaling
+                        svg_parts.append(f'  <g transform="scale({scale_x},{scale_y})">')
+                        svg_parts.append(f'    <g transform="{transform}">')
+                        svg_parts.append(f'      <path d="{paths}" fill="{hex_color}" />')
+                        svg_parts.append('    </g>')
+                        svg_parts.append('  </g>')
+                    else:
+                        # Fallback: just use the transform as-is
+                        svg_parts.append(f'  <g transform="{transform}">')
+                        svg_parts.append(f'    <path d="{paths}" fill="{hex_color}" />')
+                        svg_parts.append('  </g>')
         
         # SVG footer
-        svg_parts.append('</g>\n</svg>')
+        svg_parts.append('</svg>')
         
         return '\n'.join(svg_parts)
     
@@ -158,7 +191,8 @@ class ImageToSVGConverter:
         """Use potrace to convert a binary mask to SVG path data."""
         try:
             # Convert boolean mask to bitmap
-            bitmap = Image.fromarray((mask * 255).astype(np.uint8), mode='L')
+            # Invert the mask since potrace treats black as foreground
+            bitmap = Image.fromarray((~mask * 255).astype(np.uint8))
             
             # Save as temporary BMP
             with tempfile.NamedTemporaryFile(suffix='.bmp', delete=False) as tmp_bmp:
@@ -186,23 +220,38 @@ class ImageToSVGConverter:
                 print(f"Potrace error: {result.stderr}")
                 return None
             
-            # Extract path data from SVG
+            # Extract path data and transform from SVG
             tree = ET.parse(tmp_svg_path)
             root = tree.getroot()
             
-            # Find all path elements
+            # Find the g element with transform and its paths
+            transform = None
             paths = []
+            viewbox = None
+            
+            # Get viewBox from root SVG
+            viewbox_attr = root.get('viewBox')
+            if viewbox_attr:
+                viewbox = viewbox_attr.split()
+            
             for elem in root.iter():
-                if elem.tag.endswith('path'):
-                    d = elem.get('d')
-                    if d:
-                        paths.append(d)
+                if elem.tag.endswith('g') and 'transform' in elem.attrib:
+                    transform = elem.get('transform')
+                    # Get all paths within this g element
+                    for path in elem.iter():
+                        if path.tag.endswith('path'):
+                            d = path.get('d')
+                            if d:
+                                paths.append(d)
             
             # Clean up temp files
             os.unlink(tmp_bmp_path)
             os.unlink(tmp_svg_path)
             
-            return ' '.join(paths) if paths else None
+            # Return transform, paths, and viewbox info
+            if paths:
+                return {'transform': transform, 'paths': ' '.join(paths), 'viewbox': viewbox}
+            return None
             
         except Exception as e:
             print(f"Error tracing bitmap: {e}")
@@ -360,6 +409,10 @@ def main():
         '--quantize-only', action='store_true',
         help='Only quantize colors in existing SVG (for SVG input)'
     )
+    parser.add_argument(
+        '--include-background', action='store_true',
+        help='Include black background in output (default: skip black background)'
+    )
     
     args = parser.parse_args()
     
@@ -394,7 +447,8 @@ def main():
             n_colors=args.colors,
             method=args.method,
             simplify=not args.no_simplify,
-            threshold=args.threshold
+            threshold=args.threshold,
+            include_background=args.include_background
         )
         converter.convert(input_path, output_path)
     
