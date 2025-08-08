@@ -21,12 +21,13 @@ import xml.etree.ElementTree as ET
 class ImageToSVGConverter:
     """Main converter class for image to printable SVG conversion."""
     
-    def __init__(self, n_colors=8, method='kmeans', simplify=True, threshold=128, include_background=False):
+    def __init__(self, n_colors=8, method='kmeans', simplify=True, threshold=128, include_background=False, suggested_colors=None):
         self.n_colors = n_colors
         self.method = method
         self.simplify = simplify
         self.threshold = threshold
         self.include_background = include_background
+        self.suggested_colors = suggested_colors  # List of (R, G, B) tuples
         self.palette = None
     
     def convert(self, input_path, output_path):
@@ -70,15 +71,40 @@ class ImageToSVGConverter:
         
         if self.method == 'kmeans':
             # Use k-means clustering
-            kmeans = KMeans(n_clusters=self.n_colors, random_state=42, n_init=10)
-            kmeans.fit(pixels)
-            
-            # Get the color palette
-            self.palette = kmeans.cluster_centers_.astype(int)
-            
-            # Replace pixels with cluster centers
-            labels = kmeans.predict(pixels)
-            quantized_pixels = self.palette[labels]
+            if self.suggested_colors and len(self.suggested_colors) > 0:
+                # If we have suggested colors, use them as initial centers
+                n_suggested = min(len(self.suggested_colors), self.n_colors)
+                n_remaining = self.n_colors - n_suggested
+                
+                if n_remaining > 0:
+                    # Use k-means to find additional colors
+                    kmeans = KMeans(n_clusters=n_remaining, random_state=42, n_init=10)
+                    kmeans.fit(pixels)
+                    
+                    # Combine suggested colors with k-means centers
+                    suggested_array = np.array(self.suggested_colors[:n_suggested])
+                    kmeans_centers = kmeans.cluster_centers_.astype(int)
+                    self.palette = np.vstack([suggested_array, kmeans_centers])
+                else:
+                    # Use only suggested colors
+                    self.palette = np.array(self.suggested_colors[:self.n_colors])
+                
+                # Now cluster all pixels using the combined palette
+                from scipy.spatial.distance import cdist
+                distances = cdist(pixels, self.palette)
+                labels = np.argmin(distances, axis=1)
+                quantized_pixels = self.palette[labels]
+            else:
+                # Standard k-means without suggested colors
+                kmeans = KMeans(n_clusters=self.n_colors, random_state=42, n_init=10)
+                kmeans.fit(pixels)
+                
+                # Get the color palette
+                self.palette = kmeans.cluster_centers_.astype(int)
+                
+                # Replace pixels with cluster centers
+                labels = kmeans.predict(pixels)
+                quantized_pixels = self.palette[labels]
             
         elif self.method == 'posterize':
             # Simple posterization
@@ -102,14 +128,65 @@ class ImageToSVGConverter:
         
         elif self.method == 'adaptive':
             # Adaptive palette using PIL's quantize
-            pil_image = Image.fromarray(img_array)
-            quantized = pil_image.quantize(colors=self.n_colors, method=Image.Quantize.MEDIANCUT)
-            quantized_rgb = quantized.convert('RGB')
-            quantized_pixels = np.array(quantized_rgb).reshape(-1, 3)
-            
-            # Extract palette
-            self.palette = np.array([quantized_rgb.getpalette()[i:i+3] 
-                                    for i in range(0, self.n_colors*3, 3)])
+            if self.suggested_colors and len(self.suggested_colors) > 0:
+                # If we have suggested colors, combine with adaptive palette
+                n_suggested = min(len(self.suggested_colors), self.n_colors)
+                n_remaining = self.n_colors - n_suggested
+                
+                if n_remaining > 0:
+                    # Get additional colors using adaptive quantization
+                    pil_image = Image.fromarray(img_array)
+                    quantized = pil_image.quantize(colors=n_remaining, method=Image.Quantize.MEDIANCUT)
+                    
+                    # Get the palette from the quantized image
+                    palette = quantized.getpalette()
+                    if palette:
+                        adaptive_colors = []
+                        for i in range(0, min(n_remaining * 3, len(palette)), 3):
+                            if i + 2 < len(palette):
+                                adaptive_colors.append([palette[i], palette[i+1], palette[i+2]])
+                        
+                        # Combine suggested and adaptive colors
+                        suggested_array = np.array(self.suggested_colors[:n_suggested])
+                        adaptive_array = np.array(adaptive_colors)
+                        self.palette = np.vstack([suggested_array, adaptive_array])
+                    else:
+                        # Just use suggested colors
+                        self.palette = np.array(self.suggested_colors[:self.n_colors])
+                else:
+                    # Use only suggested colors
+                    self.palette = np.array(self.suggested_colors[:self.n_colors])
+                
+                # Map pixels to nearest palette color
+                from scipy.spatial.distance import cdist
+                distances = cdist(pixels, self.palette)
+                labels = np.argmin(distances, axis=1)
+                quantized_pixels = self.palette[labels]
+            else:
+                # Standard adaptive quantization
+                pil_image = Image.fromarray(img_array)
+                quantized = pil_image.quantize(colors=self.n_colors, method=Image.Quantize.MEDIANCUT)
+                
+                # Get the palette from the quantized image
+                palette = quantized.getpalette()
+                if palette:
+                    # Extract only the colors we need (palette might be longer)
+                    # PIL returns palette as a flat list [r1,g1,b1,r2,g2,b2,...]
+                    self.palette = []
+                    for i in range(0, min(self.n_colors * 3, len(palette)), 3):
+                        if i + 2 < len(palette):
+                            self.palette.append([palette[i], palette[i+1], palette[i+2]])
+                    self.palette = np.array(self.palette)
+                else:
+                    # Fallback if no palette found
+                    print("Warning: No palette found in adaptive quantization, falling back to unique colors")
+                    quantized_rgb = quantized.convert('RGB')
+                    unique_colors = np.unique(np.array(quantized_rgb).reshape(-1, 3), axis=0)
+                    self.palette = unique_colors[:self.n_colors]
+                
+                # Convert back to RGB and get pixels
+                quantized_rgb = quantized.convert('RGB')
+                quantized_pixels = np.array(quantized_rgb).reshape(-1, 3)
         
         # Reshape back to image
         quantized_array = quantized_pixels.reshape(original_shape)
@@ -120,9 +197,9 @@ class ImageToSVGConverter:
         width, height = image.size
         svg_parts = []
         
-        # SVG header
+        # SVG header - use pixels explicitly
         svg_parts.append(f'''<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<svg width="{width}" height="{height}" 
+<svg width="{width}px" height="{height}px" 
      viewBox="0 0 {width} {height}"
      xmlns="http://www.w3.org/2000/svg">''')
         
@@ -148,46 +225,36 @@ class ImageToSVGConverter:
                 continue
             
             # Convert to path using potrace
-            result = self.trace_bitmap(mask)
+            result = self.trace_bitmap(mask, width, height)
             
             if result:
                 hex_color = '#{:02x}{:02x}{:02x}'.format(*color)
-                transform = result.get('transform', '')
                 paths = result.get('paths', '')
+                transform = result.get('transform', '')
                 
                 if paths:
-                    # Potrace outputs with viewBox "0 0 19200 19200" and transform "translate(0,1920) scale(0.1,-0.1)"
-                    # This means coordinates are in 1/10 points. We need to scale to our pixel space.
-                    viewbox = result.get('viewbox', None)
-                    
-                    if viewbox and len(viewbox) >= 4:
-                        # Get potrace's coordinate space dimensions
-                        potrace_width = float(viewbox[2])
-                        potrace_height = float(viewbox[3])
-                        
-                        # Calculate scale to fit our canvas
-                        scale_x = width / potrace_width
-                        scale_y = height / potrace_height
-                        
-                        # Apply both potrace's transform and our scaling
-                        svg_parts.append(f'  <g transform="scale({scale_x},{scale_y})">')
-                        svg_parts.append(f'    <g transform="{transform}">')
-                        svg_parts.append(f'      <path d="{paths}" fill="{hex_color}" />')
-                        svg_parts.append('    </g>')
-                        svg_parts.append('  </g>')
-                    else:
-                        # Fallback: just use the transform as-is
+                    if transform:
                         svg_parts.append(f'  <g transform="{transform}">')
                         svg_parts.append(f'    <path d="{paths}" fill="{hex_color}" />')
                         svg_parts.append('  </g>')
+                    else:
+                        svg_parts.append(f'  <path d="{paths}" fill="{hex_color}" />')
         
         # SVG footer
         svg_parts.append('</svg>')
         
         return '\n'.join(svg_parts)
     
-    def trace_bitmap(self, mask):
-        """Use potrace to convert a binary mask to SVG path data."""
+    def trace_bitmap(self, mask, target_width, target_height):
+        """Use potrace to convert a binary mask to SVG path data.
+        
+        Args:
+            mask: Boolean numpy array
+            target_width: Desired output width in pixels
+            target_height: Desired output height in pixels
+        """
+        tmp_bmp_path = None
+        tmp_svg_path = None
         try:
             # Convert boolean mask to bitmap
             # Invert the mask since potrace treats black as foreground
@@ -202,6 +269,7 @@ class ImageToSVGConverter:
             with tempfile.NamedTemporaryFile(suffix='.svg', delete=False) as tmp_svg:
                 tmp_svg_path = tmp_svg.name
             
+            # Run potrace without specifying dimensions - we'll handle scaling ourselves
             cmd = [
                 'potrace',
                 '-s',  # SVG output
@@ -219,42 +287,89 @@ class ImageToSVGConverter:
                 print(f"Potrace error: {result.stderr}")
                 return None
             
-            # Extract path data and transform from SVG
+            # Extract path data and dimensions from SVG
             tree = ET.parse(tmp_svg_path)
             root = tree.getroot()
             
-            # Find the g element with transform and its paths
-            transform = None
-            paths = []
-            viewbox = None
+            # Get the dimensions from potrace output
+            svg_width = root.get('width', '0')
+            svg_height = root.get('height', '0')
+            viewbox = root.get('viewBox', '')
             
-            # Get viewBox from root SVG
-            viewbox_attr = root.get('viewBox')
-            if viewbox_attr:
-                viewbox = viewbox_attr.split()
+            # Parse dimensions (remove 'pt' if present)
+            if svg_width.endswith('pt'):
+                svg_width = float(svg_width[:-2])
+            else:
+                svg_width = float(svg_width) if svg_width else mask.shape[1]
+            
+            if svg_height.endswith('pt'):
+                svg_height = float(svg_height[:-2])
+            else:
+                svg_height = float(svg_height) if svg_height else mask.shape[0]
+            
+            # Calculate scaling factors to match target dimensions
+            scale_x = target_width / svg_width if svg_width > 0 else 1
+            scale_y = target_height / svg_height if svg_height > 0 else 1
+            
+            # Collect all path data with proper scaling
+            all_paths = []
             
             for elem in root.iter():
                 if elem.tag.endswith('g') and 'transform' in elem.attrib:
-                    transform = elem.get('transform')
-                    # Get all paths within this g element
+                    # Found a group with transform
+                    group_transform = elem.get('transform')
                     for path in elem.iter():
                         if path.tag.endswith('path'):
                             d = path.get('d')
                             if d:
-                                paths.append(d)
+                                # We'll apply scaling to the entire group
+                                all_paths.append({
+                                    'path': d,
+                                    'transform': f'scale({scale_x},{scale_y}) {group_transform}'
+                                })
+                elif elem.tag.endswith('path'):
+                    # Direct path without group
+                    d = elem.get('d')
+                    if d:
+                        all_paths.append({
+                            'path': d,
+                            'transform': f'scale({scale_x},{scale_y})'
+                        })
             
-            # Clean up temp files
-            os.unlink(tmp_bmp_path)
-            os.unlink(tmp_svg_path)
+            # Combine all paths into a single path element with proper transform
+            if all_paths:
+                # If there's only one path with one transform, simplify
+                if len(all_paths) == 1:
+                    return {
+                        'paths': all_paths[0]['path'],
+                        'transform': all_paths[0]['transform']
+                    }
+                else:
+                    # Multiple paths - combine them
+                    combined_paths = ' '.join([p['path'] for p in all_paths])
+                    # Use the first transform (they should all be the same)
+                    return {
+                        'paths': combined_paths,
+                        'transform': all_paths[0]['transform'] if all_paths else ''
+                    }
             
-            # Return transform, paths, and viewbox info
-            if paths:
-                return {'transform': transform, 'paths': ' '.join(paths), 'viewbox': viewbox}
             return None
             
         except Exception as e:
             print(f"Error tracing bitmap: {e}")
             return None
+        finally:
+            # Always clean up temp files
+            if tmp_bmp_path and os.path.exists(tmp_bmp_path):
+                try:
+                    os.unlink(tmp_bmp_path)
+                except:
+                    pass
+            if tmp_svg_path and os.path.exists(tmp_svg_path):
+                try:
+                    os.unlink(tmp_svg_path)
+                except:
+                    pass
 
 
 class SVGColorProcessor:
