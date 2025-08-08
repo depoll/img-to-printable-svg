@@ -120,12 +120,11 @@ class ImageToSVGConverter:
         width, height = image.size
         svg_parts = []
         
-        # SVG header with white background
+        # SVG header
         svg_parts.append(f'''<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <svg width="{width}" height="{height}" 
      viewBox="0 0 {width} {height}"
-     xmlns="http://www.w3.org/2000/svg">
-<rect width="{width}" height="{height}" fill="white"/>''')
+     xmlns="http://www.w3.org/2000/svg">''')
         
         # Process each color separately
         img_array = np.array(image)
