@@ -12,20 +12,40 @@ Convert full-color images to SVGs with limited color palettes, perfect for 3D pr
 
 ## Installation
 
-### Method 1: Docker (Recommended)
+### Method 1: Docker with Web UI (Recommended)
 
-The easiest way to use this tool is with Docker. No need to install Python or Potrace manually!
+The easiest way to use this tool is with Docker and the web interface. No need to install Python or Potrace manually!
 
-**Using Docker Compose:**
+#### Create docker-compose.yml
+
+```yaml
+version: '3.8'
+
+services:
+  web:
+    image: ghcr.io/depoll/img-to-printable-svg:latest
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+```
+
+#### Start the Web UI
+
 ```bash
-# Pull the latest image
-docker-compose pull
+# Start the web interface
+docker-compose up -d
 
-# Process an image (place files in ./input directory)
-docker-compose run --rm img2svg /app/input/photo.jpg /app/output/result.svg -c 8
+# Open your browser to http://localhost:5000
+```
 
-# Or build locally
+#### Build Locally (Optional)
+
+```bash
+# Build the image locally instead of pulling from registry
 docker-compose build
+
+# Then start as usual
+docker-compose up -d
 ```
 
 **Using Docker directly:**
@@ -33,10 +53,8 @@ docker-compose build
 # Pull from GitHub Container Registry
 docker pull ghcr.io/depoll/img-to-printable-svg:latest
 
-# Run the converter
-docker run --rm -v $(pwd)/input:/app/input -v $(pwd)/output:/app/output \
-  ghcr.io/depoll/img-to-printable-svg:latest \
-  /app/input/photo.jpg /app/output/result.svg -c 8
+# Run the web interface
+docker run -d -p 5000:5000 ghcr.io/depoll/img-to-printable-svg:latest
 ```
 
 ### Method 2: Local Installation
@@ -112,21 +130,28 @@ pip install Pillow numpy scikit-learn scipy
 
 ## Quick Start
 
-### Using Docker
+### Using Docker with Web UI
 
-Create input and output directories:
+1. Create a `docker-compose.yml` file (see above)
+2. Start the services:
 ```bash
-mkdir -p input output
+docker-compose up -d
 ```
+3. Open your browser to http://localhost:5000
+4. Upload an image and configure your conversion settings
+5. Download the converted SVG
 
-Place your images in the `input` directory, then run:
+### Using Docker CLI
+
+For command-line usage without the web interface:
 ```bash
-# Using docker-compose
-docker-compose run --rm img2svg /app/input/photo.jpg /app/output/result.svg -c 8
+# Create directories
+mkdir -p input output
 
-# Or using docker directly
-docker run --rm -v $(pwd):/app/work ghcr.io/depoll/img-to-printable-svg:latest \
-  /app/work/input/photo.jpg /app/work/output/result.svg -c 8
+# Run conversion
+docker run --rm -v $(pwd)/input:/app/input -v $(pwd)/output:/app/output \
+  ghcr.io/depoll/img-to-printable-svg:latest \
+  python img2svg.py /app/input/photo.jpg /app/output/result.svg -c 8
 ```
 
 ### Using Local Installation
