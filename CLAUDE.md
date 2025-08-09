@@ -20,11 +20,15 @@ Image to Printable SVG Converter - A utility for converting full-color raster im
    - Loads and quantizes raster images using configurable methods
    - Converts each color layer to vector paths using potrace
    - Combines layers into a single SVG output
+   - Supports unlimited colors mode with smart color reduction
+   - Optional denoising for cleaner output
 
 3. **SVGColorProcessor** class - SVG manipulation utilities:
    - Removes gradients by converting to solid colors
    - Quantizes existing SVG colors to limited palette
    - Preserves SVG structure while modifying colors
+   - Rasterizes SVG to PNG for gradient processing
+   - Extracts colors from gradients for better quantization
 
 ### Original Scripts (reference implementations)
 
@@ -36,21 +40,31 @@ Image to Printable SVG Converter - A utility for converting full-color raster im
 ### Color Quantization Methods
 
 1. **k-means**: Uses scikit-learn's KMeans clustering to find optimal color palette
+   - Supports suggested colors as initial centers
+   - Handles single color (silhouette) mode
 2. **posterize**: Simple bit-depth reduction for artistic effect
+   - Falls back to k-means if too many colors result
 3. **adaptive**: Uses PIL's adaptive palette generation with median cut
+   - Can combine with suggested colors
 
 ### Image to Vector Conversion
 
 - Uses potrace for bitmap tracing (converts binary masks to SVG paths)
 - Processes each color as a separate layer
 - Combines all layers into a single SVG with proper color fills
+- Applies proper scaling to maintain original dimensions
+- Skips colors with minimal presence (< 10 pixels)
+- Optional background inclusion (black background skipped by default)
 
 ### Dependencies
 
 - **Pillow**: Image loading and manipulation
 - **numpy**: Array operations for color processing
 - **scikit-learn**: K-means clustering for color quantization
+- **scipy**: Median filter for denoising functionality
 - **potrace**: External command-line tool (must be installed separately via system package manager)
+- **cairosvg** (optional): For high-quality SVG rasterization
+- **xml.etree.ElementTree**: Built-in XML/SVG parsing
 
 ## Common Commands
 
@@ -59,6 +73,11 @@ Image to Printable SVG Converter - A utility for converting full-color raster im
 ```bash
 # Install Python dependencies
 pip install -r requirements.txt
+# Or manually:
+pip install Pillow numpy scikit-learn scipy
+
+# Optional for SVG rasterization:
+pip install cairosvg
 
 # Install potrace (platform-specific)
 # macOS:
@@ -79,8 +98,14 @@ python img2svg.py input.jpg output.svg
 # Specify number of colors
 python img2svg.py input.png output.svg -c 16
 
+# Unlimited colors mode (smart color reduction)
+python img2svg.py input.jpg output.svg -c 0
+
 # Use different quantization method
 python img2svg.py input.jpg output.svg -m posterize
+
+# Apply denoising (good for AI-generated images)
+python img2svg.py noisy.jpg clean.svg --denoise --denoise-strength 5
 
 # Process existing SVG - remove gradients and reduce colors
 python img2svg.py input.svg output.svg --remove-gradients -c 4
@@ -130,6 +155,12 @@ img-to-printable-svg/
 4. **Memory Usage**: Large images with many colors may use significant memory during k-means clustering. Consider adding batch processing for very large images.
 
 5. **SVG Compatibility**: Output SVGs are standard-compliant and should work with all major vector graphics software and fabrication tools.
+
+6. **Unlimited Colors Mode**: When using `-c 0`, the tool applies smart color reduction to merge very similar colors (tolerance of 8 in RGB space), preventing thousands of nearly identical colors.
+
+7. **Denoising**: The `--denoise` option uses median filtering and optional Gaussian blur to reduce artifacts, particularly useful for AI-generated images.
+
+8. **Output Filename**: If no output filename is provided, the tool automatically generates one based on the input name and color count (e.g., `input_8colors.svg` or `input_unlimited.svg`).
 
 ## Common Issues and Solutions
 

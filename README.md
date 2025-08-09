@@ -4,7 +4,7 @@ Convert full-color images to SVGs with limited color palettes, perfect for 3D pr
 
 ## Features
 
-- 🎨 **Color Quantization**: Reduce images to a specific number of colors (2-256)
+- 🎨 **Color Quantization**: Reduce images to a specific number of colors (1-256, or unlimited)
 - 🔄 **Multiple Methods**: Choose from k-means clustering, posterization, or adaptive quantization
 - 📐 **Vector Conversion**: Automatically trace bitmap layers to create clean SVG paths
 - 🎯 **SVG Processing**: Reduce colors in existing SVGs and remove gradients
@@ -107,7 +107,7 @@ pip install -r requirements.txt
 
 Or install manually:
 ```bash
-pip install Pillow numpy scikit-learn
+pip install Pillow numpy scikit-learn scipy
 ```
 
 ## Quick Start
@@ -141,6 +141,13 @@ python img2svg.py photo.jpg output.svg
 Create a 4-color version for screen printing:
 ```bash
 python img2svg.py design.png screenprint.svg -c 4
+```
+
+### Unlimited Colors Mode
+
+Process with unlimited colors (smart color reduction to merge similar colors):
+```bash
+python img2svg.py photo.jpg output.svg -c 0
 ```
 
 ### Different Quantization Methods
@@ -187,25 +194,30 @@ python img2svg.py input.svg output.svg --quantize-only -c 16
 ```
 usage: img2svg.py [-h] [-c COLORS] [-m {kmeans,posterize,adaptive}]
                   [--no-simplify] [-t THRESHOLD] [--remove-gradients]
-                  [--sample-gradients] [--rasterize] [--dpi DPI]
-                  [--quantize-only] [--include-background] input output
+                  [--sample-gradients] [--no-sample-gradients] [--rasterize] 
+                  [--dpi DPI] [--quantize-only] [--include-background]
+                  [--denoise] [--denoise-strength {1,3,5,7}]
+                  input [output]
 
 arguments:
   input                 Input image or SVG file
-  output               Output SVG file
+  output               Output SVG file (optional, defaults to input_Ncolors.svg)
 
 options:
   -h, --help           Show help message
-  -c, --colors         Number of colors in palette (default: 8)
+  -c, --colors         Number of colors in palette (default: 8, 0 for unlimited)
   -m, --method         Color quantization method (default: kmeans)
   --no-simplify        Disable path simplification (more detail, larger files)
   -t, --threshold      Threshold for bitmap tracing (0-255, default: 128)
   --remove-gradients   Remove gradients from SVG input
-  --sample-gradients   Sample colors from gradients for quantization
+  --sample-gradients   Sample colors from gradients for quantization (default for SVG)
+  --no-sample-gradients Disable gradient color sampling (keep gradients as-is)
   --rasterize          Rasterize SVG before processing (requires Cairo)
   --dpi                DPI for SVG rasterization (default: 150)
   --quantize-only      Only quantize colors in existing SVG
   --include-background Include black background in output
+  --denoise            Apply denoising to reduce artifacts (good for AI-generated images)
+  --denoise-strength   Denoising strength (1=light, 3=medium, 5=strong, 7=very strong)
 ```
 
 ## Use Cases
@@ -232,6 +244,12 @@ python img2svg.py graphic.png vinyl.svg -c 2 -t 200
 Convert photos to engraveable vectors:
 ```bash
 python img2svg.py portrait.jpg engrave.svg -c 4 --no-simplify
+```
+
+### AI-Generated Images
+Clean up AI-generated images with denoising:
+```bash
+python img2svg.py ai_image.png clean.svg -c 8 --denoise --denoise-strength 5
 ```
 
 ## Tips for Best Results
