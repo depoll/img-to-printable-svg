@@ -13,7 +13,7 @@
         
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #14532d 0%, #166534 100%);
             min-height: 100vh;
             padding: 20px;
         }
@@ -68,20 +68,20 @@
         }
         
         .upload-area:hover {
-            border-color: #667eea;
+            border-color: #16a34a;
             background: #f7f9fc;
         }
         
         .upload-area.dragover {
-            border-color: #667eea;
-            background: #eef2ff;
+            border-color: #16a34a;
+            background: #f0fdf4;
         }
         
         .upload-area.has-file {
             padding: 15px;
             display: flex;
-            align-items: center;
-            justify-content: space-between;
+            flex-direction: column;
+            gap: 10px;
             cursor: default;
         }
         
@@ -95,12 +95,15 @@
             display: flex;
             align-items: center;
             gap: 12px;
-            flex: 1;
+            width: 100%;
+            min-width: 0;  /* Allow flex item to shrink below content size */
+            overflow: hidden;
         }
         
         .file-icon {
             font-size: 24px;
-            color: #667eea;
+            color: #16a34a;
+            flex-shrink: 0;  /* Prevent icon from shrinking */
         }
         
         .file-name {
@@ -118,11 +121,13 @@
             color: white;
             border: none;
             border-radius: 6px;
-            padding: 8px 12px;
+            padding: 10px 16px;
             cursor: pointer;
-            font-size: 12px;
+            font-size: 13px;
             font-weight: 500;
             transition: background 0.3s;
+            width: 100%;
+            text-align: center;
         }
         
         .clear-file-btn:hover {
@@ -148,7 +153,7 @@
         
         .range-value {
             text-align: right;
-            color: #667eea;
+            color: #16a34a;
             font-weight: bold;
             font-size: 14px;
         }
@@ -221,7 +226,7 @@
         }
         
         .color-chip.selected {
-            border-color: #667eea;
+            border-color: #16a34a;
             border-width: 3px;
         }
         
@@ -230,7 +235,7 @@
             position: absolute;
             top: 2px;
             right: 2px;
-            background: #667eea;
+            background: #16a34a;
             color: white;
             width: 16px;
             height: 16px;
@@ -268,7 +273,7 @@
             margin-top: 5px;
         }
         
-        button {
+        button:not(.clear-file-btn):not(.tab-btn) {
             width: 100%;
             padding: 12px 20px;
             border: none;
@@ -280,14 +285,14 @@
         }
         
         .convert-btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
             color: white;
             margin-bottom: 10px;
         }
         
         .convert-btn:hover:not(:disabled) {
             transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+            box-shadow: 0 5px 15px rgba(22, 163, 74, 0.4);
         }
         
         .convert-btn:disabled {
@@ -296,14 +301,14 @@
         }
         
         .download-btn {
-            background: #48bb78;
+            background: #059669;
             color: white;
         }
         
         .download-btn:hover:not(:disabled) {
-            background: #38a169;
+            background: #047857;
             transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(72, 187, 120, 0.4);
+            box-shadow: 0 5px 15px rgba(5, 150, 105, 0.4);
         }
         
         .download-btn:disabled {
@@ -344,9 +349,9 @@
         }
         
         .tab-btn.active {
-            background: #667eea;
+            background: #16a34a;
             color: white;
-            border-color: #667eea;
+            border-color: #16a34a;
         }
         
         .preview-image {
@@ -414,7 +419,7 @@
             width: 16px;
             height: 16px;
             border: 2px solid #f3f3f3;
-            border-top: 2px solid #667eea;
+            border-top: 2px solid #16a34a;
             border-radius: 50%;
             animation: spin 1s linear infinite;
             margin-right: 10px;
@@ -525,14 +530,22 @@
                 <div class="control-group" id="svgOptions" style="display: none;">
                     <label>Gradient Handling (SVG only)</label>
                     <select id="gradientMode">
+                        <option value="sample" selected>Sample gradient colors</option>
                         <option value="default">Keep gradients as-is</option>
-                        <option value="sample">Sample gradient colors</option>
                         <option value="remove">Remove gradients</option>
+                        <option value="rasterize">Rasterize then convert</option>
                     </select>
                     <div style="font-size: 12px; color: #718096; margin-top: 5px;">
+                        • Sample colors: Include gradient colors in quantization (default)<br>
                         • Keep as-is: Preserve gradients unchanged<br>
-                        • Sample colors: Include gradient colors in quantization<br>
-                        • Remove: Convert gradients to solid colors
+                        • Remove: Convert gradients to solid colors<br>
+                        • Rasterize: Convert to pixels first (best for complex gradients)
+                    </div>
+                    
+                    <div id="rasterizeOptions" style="display: none; margin-top: 10px;">
+                        <label for="rasterDpi" style="font-size: 13px;">Rasterization DPI</label>
+                        <input type="range" id="rasterDpi" min="72" max="300" value="150">
+                        <div class="range-value" id="rasterDpiValue">150</div>
                     </div>
                 </div>
                 
@@ -613,6 +626,8 @@
         const colorsValue = document.getElementById('colorsValue');
         const thresholdSlider = document.getElementById('threshold');
         const thresholdValue = document.getElementById('thresholdValue');
+        const rasterDpiSlider = document.getElementById('rasterDpi');
+        const rasterDpiValue = document.getElementById('rasterDpiValue');
         
         // Update range values
         colorsSlider.addEventListener('input', () => {
@@ -621,6 +636,20 @@
         
         thresholdSlider.addEventListener('input', () => {
             thresholdValue.textContent = thresholdSlider.value;
+        });
+        
+        rasterDpiSlider.addEventListener('input', () => {
+            rasterDpiValue.textContent = rasterDpiSlider.value;
+        });
+        
+        // Show/hide rasterize options based on gradient mode
+        document.getElementById('gradientMode').addEventListener('change', (e) => {
+            const rasterizeOptions = document.getElementById('rasterizeOptions');
+            if (e.target.value === 'rasterize') {
+                rasterizeOptions.style.display = 'block';
+            } else {
+                rasterizeOptions.style.display = 'none';
+            }
         });
         
         // Color palette management
@@ -757,7 +786,7 @@
                 uploadContent.innerHTML = `
                     <div class="file-info">
                         <span class="file-icon">${fileIcon}</span>
-                        <span class="file-name">${file.name}</span>
+                        <span class="file-name" title="${file.name}">${file.name}</span>
                     </div>
                     <button class="clear-file-btn" onclick="clearFile()">Clear</button>
                 `;
@@ -890,7 +919,13 @@
             
             // Add gradient mode if it's an SVG file
             if (currentFile.name.toLowerCase().endsWith('.svg')) {
-                formData.append('gradientMode', document.getElementById('gradientMode').value);
+                const gradientMode = document.getElementById('gradientMode').value;
+                formData.append('gradientMode', gradientMode);
+                
+                // Add DPI if rasterizing
+                if (gradientMode === 'rasterize') {
+                    formData.append('rasterDpi', rasterDpiSlider.value);
+                }
             }
             
             // Add suggested colors as JSON
@@ -996,14 +1031,25 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ svg: currentSVG })
+                    body: JSON.stringify({ 
+                        svg: currentSVG,
+                        colors: colorsSlider.value,
+                        filename: currentFile ? currentFile.name : 'converted'
+                    })
                 });
                 
                 const blob = await response.blob();
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = 'converted.svg';
+                
+                // Generate filename with color count
+                let baseFilename = currentFile ? currentFile.name : 'converted';
+                if (baseFilename.includes('.')) {
+                    baseFilename = baseFilename.substring(0, baseFilename.lastIndexOf('.'));
+                }
+                a.download = `${baseFilename}_${colorsSlider.value}colors.svg`;
+                
                 a.click();
                 URL.revokeObjectURL(url);
             } catch (error) {

@@ -45,6 +45,7 @@ docker run --rm -v $(pwd)/input:/app/input -v $(pwd)/output:/app/output \
 
 1. Python 3.8 or higher
 2. Potrace (for image to vector conversion)
+3. Cairo (optional, for SVG rasterization features)
 
 #### Install Potrace
 
@@ -60,6 +61,43 @@ sudo apt-get install potrace
 
 **Windows:**
 Download from [Potrace website](http://potrace.sourceforge.net/)
+
+#### Install Cairo (Optional - for SVG rasterization)
+
+Cairo is needed if you want to use the `--rasterize` option for processing complex SVG gradients.
+
+**macOS:**
+```bash
+brew install cairo
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get update
+sudo apt-get install libcairo2-dev
+```
+
+**Fedora/RHEL/CentOS:**
+```bash
+sudo dnf install cairo-devel
+# or for older versions:
+sudo yum install cairo-devel
+```
+
+**Windows (using Conda):**
+```bash
+conda install cairo
+```
+
+**Arch Linux:**
+```bash
+sudo pacman -S cairo
+```
+
+**Alpine Linux:**
+```bash
+apk add cairo-dev
+```
 
 #### Install Python Dependencies
 
@@ -129,6 +167,16 @@ python img2svg.py illustration.png output.svg -m adaptive
 python img2svg.py complex.svg simple.svg --remove-gradients -c 8
 ```
 
+**Sample gradient colors for better quantization:**
+```bash
+python img2svg.py gradient.svg output.svg --sample-gradients -c 8
+```
+
+**Rasterize SVG first (best for complex gradients):**
+```bash
+python img2svg.py complex.svg output.svg --rasterize -c 8 --dpi 150
+```
+
 **Only reduce colors (keep gradients):**
 ```bash
 python img2svg.py input.svg output.svg --quantize-only -c 16
@@ -139,7 +187,8 @@ python img2svg.py input.svg output.svg --quantize-only -c 16
 ```
 usage: img2svg.py [-h] [-c COLORS] [-m {kmeans,posterize,adaptive}]
                   [--no-simplify] [-t THRESHOLD] [--remove-gradients]
-                  [--quantize-only] input output
+                  [--sample-gradients] [--rasterize] [--dpi DPI]
+                  [--quantize-only] [--include-background] input output
 
 arguments:
   input                 Input image or SVG file
@@ -152,7 +201,11 @@ options:
   --no-simplify        Disable path simplification (more detail, larger files)
   -t, --threshold      Threshold for bitmap tracing (0-255, default: 128)
   --remove-gradients   Remove gradients from SVG input
+  --sample-gradients   Sample colors from gradients for quantization
+  --rasterize          Rasterize SVG before processing (requires Cairo)
+  --dpi                DPI for SVG rasterization (default: 150)
   --quantize-only      Only quantize colors in existing SVG
+  --include-background Include black background in output
 ```
 
 ## Use Cases

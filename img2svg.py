@@ -376,6 +376,146 @@ class SVGColorProcessor:
     """Process existing SVG files to reduce colors and remove gradients."""
     
     @staticmethod
+    def rasterize_svg(svg_path, output_path=None, dpi=150):
+        """Rasterize an SVG file to a PNG image.
+        
+        Args:
+            svg_path: Path to input SVG file
+            output_path: Optional path for output PNG (if None, returns PIL Image)
+            dpi: Resolution for rasterization (higher = better quality but larger)
+        
+        Returns:
+            PIL Image object if output_path is None, otherwise the output path
+        """
+        try:
+            # Try using cairosvg if available (best quality)
+            try:
+                import cairosvg
+                
+                # Get SVG dimensions
+                tree = ET.parse(svg_path)
+                root = tree.getroot()
+                
+                # Try to extract width/height
+                width = root.get('width', '800')
+                height = root.get('height', '600')
+                viewbox = root.get('viewBox', '')
+                
+                # Parse dimensions
+                if viewbox:
+                    parts = viewbox.split()
+                    if len(parts) == 4:
+                        width = float(parts[2])
+                        height = float(parts[3])
+                else:
+                    # Remove units if present
+                    width = float(re.sub(r'[^\d.]', '', str(width)) or 800)
+                    height = float(re.sub(r'[^\d.]', '', str(height)) or 600)
+                
+                # Calculate scale based on DPI (assuming 96 DPI base)
+                scale = dpi / 96.0
+                output_width = int(width * scale)
+                output_height = int(height * scale)
+                
+                if output_path:
+                    cairosvg.svg2png(
+                        url=svg_path,
+                        write_to=output_path,
+                        output_width=output_width,
+                        output_height=output_height
+                    )
+                    return output_path
+                else:
+                    # Convert to bytes and return as PIL Image
+                    png_bytes = cairosvg.svg2png(
+                        url=svg_path,
+                        output_width=output_width,
+                        output_height=output_height
+                    )
+                    from io import BytesIO
+                    return Image.open(BytesIO(png_bytes))
+                    
+            except ImportError:
+                # Fallback: use Inkscape if available
+                import subprocess
+                import tempfile
+                
+                if output_path:
+                    png_path = output_path
+                else:
+                    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                        png_path = tmp.name
+                
+                # Try Inkscape command
+                try:
+                    # Modern Inkscape (1.0+)
+                    cmd = [
+                        'inkscape',
+                        svg_path,
+                        '--export-type=png',
+                        f'--export-filename={png_path}',
+                        f'--export-dpi={dpi}'
+                    ]
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    
+                    if result.returncode != 0:
+                        # Try older Inkscape syntax
+                        cmd = [
+                            'inkscape',
+                            svg_path,
+                            '--export-png', png_path,
+                            '--export-dpi', str(dpi)
+                        ]
+                        result = subprocess.run(cmd, capture_output=True, text=True)
+                        
+                        if result.returncode != 0:
+                            raise Exception(f"Inkscape failed: {result.stderr}")
+                    
+                    if output_path:
+                        return output_path
+                    else:
+                        # Load as PIL Image and clean up temp file
+                        img = Image.open(png_path)
+                        os.unlink(png_path)
+                        return img
+                        
+                except FileNotFoundError:
+                    # Final fallback: Simple conversion (less accurate but works)
+                    print("Warning: Neither cairosvg nor Inkscape available. Using simple fallback rasterization.")
+                    print("For better quality, install cairosvg (pip install cairosvg) or Inkscape.")
+                    
+                    # Use a simple approach: just create a basic raster from SVG size
+                    tree = ET.parse(svg_path)
+                    root = tree.getroot()
+                    
+                    # Extract dimensions
+                    width = root.get('width', '800')
+                    height = root.get('height', '600')
+                    viewbox = root.get('viewBox', '')
+                    
+                    if viewbox:
+                        parts = viewbox.split()
+                        if len(parts) == 4:
+                            width = float(parts[2])
+                            height = float(parts[3])
+                    else:
+                        width = float(re.sub(r'[^\d.]', '', str(width)) or 800)
+                        height = float(re.sub(r'[^\d.]', '', str(height)) or 600)
+                    
+                    # Create a blank image with message
+                    scale = dpi / 96.0
+                    img_width = int(width * scale)
+                    img_height = int(height * scale)
+                    
+                    raise Exception("SVG rasterization requires cairosvg or Inkscape. "
+                                    "Install with: pip install cairosvg (requires cairo library) "
+                                    "or install Inkscape from https://inkscape.org")
+                    
+        except Exception as e:
+            print(f"Error rasterizing SVG: {e}")
+            raise
+    
+    @staticmethod
     def extract_gradient_colors(root):
         """Extract all colors from gradients in an SVG."""
         gradient_colors = []
@@ -561,7 +701,7 @@ def main():
     )
     
     parser.add_argument('input', help='Input image or SVG file')
-    parser.add_argument('output', help='Output SVG file')
+    parser.add_argument('output', nargs='?', help='Output SVG file (default: input_Ncolors.svg)')
     parser.add_argument(
         '-c', '--colors', type=int, default=8,
         help='Number of colors in palette (default: 8)'
@@ -585,8 +725,20 @@ def main():
         help='Remove gradients from SVG (for SVG input)'
     )
     parser.add_argument(
-        '--sample-gradients', action='store_true',
-        help='Sample colors from gradients for quantization instead of removing them (for SVG input)'
+        '--sample-gradients', action='store_true', default=None,
+        help='Sample colors from gradients for quantization (default for SVG input)'
+    )
+    parser.add_argument(
+        '--no-sample-gradients', action='store_true',
+        help='Disable gradient color sampling (keep gradients as-is)'
+    )
+    parser.add_argument(
+        '--rasterize', action='store_true',
+        help='Rasterize SVG before processing (converts gradients to pixels, for SVG input)'
+    )
+    parser.add_argument(
+        '--dpi', type=int, default=150,
+        help='DPI for SVG rasterization (default: 150, higher = better quality)'
     )
     parser.add_argument(
         '--quantize-only', action='store_true',
@@ -600,7 +752,14 @@ def main():
     args = parser.parse_args()
     
     input_path = Path(args.input)
-    output_path = Path(args.output)
+    
+    # Generate default output filename if not provided
+    if args.output:
+        output_path = Path(args.output)
+    else:
+        # Create output filename like "input_8colors.svg"
+        output_path = input_path.parent / f"{input_path.stem}_{args.colors}colors.svg"
+        print(f"Output file: {output_path}")
     
     if not input_path.exists():
         print(f"Error: Input file {input_path} does not exist")
@@ -608,33 +767,64 @@ def main():
     
     # Check if input is SVG
     if input_path.suffix.lower() == '.svg':
-        # Process existing SVG
-        processor = SVGColorProcessor()
-        
-        temp_path = input_path
-        
-        # Handle mutually exclusive gradient options
-        if args.remove_gradients and args.sample_gradients:
-            print("Error: Cannot use both --remove-gradients and --sample-gradients")
+        # Check for mutually exclusive options
+        exclusive_count = sum([args.remove_gradients, args.rasterize, args.no_sample_gradients])
+        if exclusive_count > 1:
+            print("Error: Can only use one of --remove-gradients, --rasterize, or --no-sample-gradients")
             sys.exit(1)
         
-        if args.remove_gradients:
-            print("Removing gradients...")
-            temp_output = output_path.with_suffix('.temp.svg')
-            temp_path = processor.remove_gradients(temp_path, temp_output)
+        if args.rasterize:
+            # Rasterize SVG first, then process as image
+            print(f"Rasterizing SVG at {args.dpi} DPI...")
+            processor = SVGColorProcessor()
+            
+            # Rasterize to PIL Image
+            raster_image = processor.rasterize_svg(str(input_path), dpi=args.dpi)
+            
+            # Process as image
+            print(f"Converting rasterized image to SVG with {args.colors} colors...")
+            converter = ImageToSVGConverter(
+                n_colors=args.colors,
+                method=args.method,
+                simplify=not args.no_simplify,
+                threshold=args.threshold,
+                include_background=args.include_background
+            )
+            
+            # Save rasterized image to temp file for processing
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                raster_image.save(tmp.name)
+                temp_png = tmp.name
+            
+            try:
+                converter.convert(temp_png, output_path)
+            finally:
+                os.unlink(temp_png)
         
-        # Determine if we should sample gradients
-        sample_gradients = args.sample_gradients and not args.remove_gradients
-        
-        if sample_gradients:
-            print(f"Quantizing to {args.colors} colors (sampling gradient colors)...")
         else:
-            print(f"Quantizing to {args.colors} colors...")
-        
-        processor.quantize_colors(temp_path, output_path, args.colors, sample_gradients=sample_gradients)
-        
-        if args.remove_gradients and temp_path != input_path:
-            os.unlink(temp_path)
+            # Process existing SVG without rasterization
+            processor = SVGColorProcessor()
+            
+            temp_path = input_path
+            
+            if args.remove_gradients:
+                print("Removing gradients...")
+                temp_output = output_path.with_suffix('.temp.svg')
+                temp_path = processor.remove_gradients(temp_path, temp_output)
+            
+            # Determine if we should sample gradients
+            # Default to sampling gradients unless explicitly disabled
+            sample_gradients = not (args.remove_gradients or args.no_sample_gradients)
+            
+            if sample_gradients:
+                print(f"Quantizing to {args.colors} colors (sampling gradient colors)...")
+            else:
+                print(f"Quantizing to {args.colors} colors...")
+            
+            processor.quantize_colors(temp_path, output_path, args.colors, sample_gradients=sample_gradients)
+            
+            if args.remove_gradients and temp_path != input_path:
+                os.unlink(temp_path)
     
     else:
         # Convert image to SVG

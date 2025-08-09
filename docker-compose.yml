@@ -1,35 +1,42 @@
 version: '3.8'
 
 services:
-  img2svg:
-    image: ghcr.io/depoll/img-to-printable-svg:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-    volumes:
-      # Mount input and output directories
-      - ./input:/app/input:ro
-      - ./output:/app/output
-    environment:
-      - PYTHONUNBUFFERED=1
-    # Override the default command to process a specific file
-    # Uncomment and modify the command below to process files
-    # command: ["/app/input/example.jpg", "/app/output/example.svg", "-c", "8"]
-    
-  # Web service for interactive use (optional)
-  img2svg-web:
+  # Web service - runs by default
+  web:
     image: ghcr.io/depoll/img-to-printable-svg:latest
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8080:8080"
+      - "5000:5000"
+    volumes:
+      - ./input:/app/input:ro
+      - ./output:/app/output
+      - ./temp:/app/temp
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PORT=5000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+  # CLI service - for command-line processing
+  cli:
+    image: ghcr.io/depoll/img-to-printable-svg:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     volumes:
       - ./input:/app/input:ro
       - ./output:/app/output
     environment:
       - PYTHONUNBUFFERED=1
-    # Run a simple web server (would need additional web interface implementation)
-    command: ["python", "-m", "http.server", "8080"]
+    # Override with your own command
+    entrypoint: ["python", "img2svg.py"]
+    command: ["--help"]
     profiles:
-      - web
+      - cli

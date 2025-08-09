@@ -92,7 +92,8 @@ def convert():
     threshold = int(request.form.get('threshold', 128))
     simplify = request.form.get('simplify', 'true') == 'true'
     include_background = request.form.get('includeBackground', 'false') == 'true'
-    gradient_mode = request.form.get('gradientMode', 'default')  # default, sample, or remove
+    gradient_mode = request.form.get('gradientMode', 'default')  # default, sample, remove, or rasterize
+    raster_dpi = int(request.form.get('rasterDpi', 150))
     
     # Get suggested colors if provided
     suggested_colors_json = request.form.get('suggestedColors', '[]')
@@ -144,34 +145,69 @@ def convert():
             
             try:
                 if file_ext == '.svg':
-                    yield f"data: {json.dumps({'type': 'status', 'message': 'Processing SVG file...'})}\n\n"
-                    # Process existing SVG
-                    processor = SVGColorProcessor()
-                    
-                    temp_path = input_path
-                    
-                    # Handle gradient mode
-                    if gradient_mode == 'remove':
-                        yield f"data: {json.dumps({'type': 'status', 'message': 'Removing gradients...'})}\n\n"
-                        with tempfile.NamedTemporaryFile(suffix='.svg', delete=False, dir=TEMP_DIR) as tmp:
-                            temp_output = tmp.name
-                        temp_path = processor.remove_gradients(temp_path, temp_output)
-                    
-                    # Quantize colors with gradient sampling if requested
-                    sample_gradients = (gradient_mode == 'sample')
-                    if sample_gradients:
-                        yield f"data: {json.dumps({'type': 'status', 'message': 'Quantizing colors (sampling gradients)...'})}\n\n"
-                    else:
-                        yield f"data: {json.dumps({'type': 'status', 'message': 'Quantizing colors...'})}\n\n"
-                    
-                    processor.quantize_colors(temp_path, output_path, n_colors, sample_gradients=sample_gradients)
-                    
-                    # Clean up temp file if we created one for gradient removal
-                    if gradient_mode == 'remove' and temp_path != input_path:
+                    if gradient_mode == 'rasterize':
+                        # Rasterize SVG first, then process as image
+                        yield f"data: {json.dumps({'type': 'status', 'message': f'Rasterizing SVG at {raster_dpi} DPI...'})}\n\n"
+                        
+                        processor = SVGColorProcessor()
+                        
+                        # Rasterize to PIL Image
+                        raster_image = processor.rasterize_svg(input_path, dpi=raster_dpi)
+                        
+                        # Save rasterized image to temp file
+                        with tempfile.NamedTemporaryFile(suffix='.png', delete=False, dir=TEMP_DIR) as tmp:
+                            raster_image.save(tmp.name)
+                            temp_png = tmp.name
+                        
+                        yield f"data: {json.dumps({'type': 'status', 'message': 'Converting rasterized image to SVG...'})}\n\n"
+                        
+                        # Process as image
+                        converter = ImageToSVGConverter(
+                            n_colors=n_colors,
+                            method=method,
+                            simplify=simplify,
+                            threshold=threshold,
+                            include_background=include_background,
+                            suggested_colors=suggested_colors_rgb
+                        )
+                        
                         try:
-                            os.unlink(temp_path)
-                        except:
-                            pass
+                            converter.convert(temp_png, output_path)
+                        finally:
+                            # Clean up temp file
+                            try:
+                                os.unlink(temp_png)
+                            except:
+                                pass
+                    else:
+                        yield f"data: {json.dumps({'type': 'status', 'message': 'Processing SVG file...'})}\n\n"
+                        # Process existing SVG
+                        processor = SVGColorProcessor()
+                        
+                        temp_path = input_path
+                        
+                        # Handle gradient mode
+                        if gradient_mode == 'remove':
+                            yield f"data: {json.dumps({'type': 'status', 'message': 'Removing gradients...'})}\n\n"
+                            with tempfile.NamedTemporaryFile(suffix='.svg', delete=False, dir=TEMP_DIR) as tmp:
+                                temp_output = tmp.name
+                            temp_path = processor.remove_gradients(temp_path, temp_output)
+                        
+                        # Quantize colors with gradient sampling if requested
+                        sample_gradients = (gradient_mode == 'sample')
+                        if sample_gradients:
+                            yield f"data: {json.dumps({'type': 'status', 'message': 'Quantizing colors (sampling gradients)...'})}\n\n"
+                        else:
+                            yield f"data: {json.dumps({'type': 'status', 'message': 'Quantizing colors...'})}\n\n"
+                        
+                        processor.quantize_colors(temp_path, output_path, n_colors, sample_gradients=sample_gradients)
+                        
+                        # Clean up temp file if we created one for gradient removal
+                        if gradient_mode == 'remove' and temp_path != input_path:
+                            try:
+                                os.unlink(temp_path)
+                            except:
+                                pass
                 else:
                     yield f"data: {json.dumps({'type': 'status', 'message': 'Converting image to SVG...'})}\n\n"
                     if suggested_colors_rgb:
@@ -227,8 +263,18 @@ def download_svg():
     tmp_path = None
     try:
         svg_content = request.json.get('svg', '')
+        n_colors = request.json.get('colors', 8)
+        original_filename = request.json.get('filename', 'converted')
+        
         if not svg_content:
             return jsonify({'error': 'No SVG content provided'}), 400
+        
+        # Generate download filename with color count
+        if original_filename.endswith(('.svg', '.png', '.jpg', '.jpeg', '.gif', '.bmp')):
+            base_name = os.path.splitext(original_filename)[0]
+        else:
+            base_name = original_filename
+        download_filename = f"{base_name}_{n_colors}colors.svg"
         
         # Create temporary file for download
         with tempfile.NamedTemporaryFile(mode='w', suffix='.svg', delete=False, dir=TEMP_DIR) as tmp:
@@ -247,7 +293,7 @@ def download_svg():
             tmp_path,
             mimetype='image/svg+xml',
             as_attachment=True,
-            download_name='converted.svg'
+            download_name=download_filename
         )
         response.call_on_close(cleanup)
         return response
@@ -264,4 +310,5 @@ if __name__ == '__main__':
     os.makedirs('templates', exist_ok=True)
     
     # Run the app
-    app.run(debug=True, port=5000)
+    # Bind to 0.0.0.0 to make it accessible from outside the container
+    app.run(host='0.0.0.0', debug=True, port=5000)
