@@ -498,7 +498,7 @@
                 
                 <div class="control-group">
                     <label for="colors">Number of Colors</label>
-                    <input type="range" id="colors" min="2" max="32" value="8">
+                    <input type="range" id="colors" min="1" max="33" value="8">
                     <div class="range-value" id="colorsValue">8</div>
                 </div>
                 
@@ -525,6 +525,21 @@
                 <div class="checkbox-group">
                     <input type="checkbox" id="includeBackground">
                     <label for="includeBackground">Include background</label>
+                </div>
+                
+                <div class="checkbox-group">
+                    <input type="checkbox" id="denoise">
+                    <label for="denoise">Denoise (for AI images)</label>
+                </div>
+                
+                <div id="denoiseOptions" style="display: none; margin-top: 10px;">
+                    <label for="denoiseStrength" style="font-size: 13px;">Denoising Strength</label>
+                    <select id="denoiseStrength">
+                        <option value="1">Light</option>
+                        <option value="3" selected>Medium</option>
+                        <option value="5">Strong</option>
+                        <option value="7">Very Strong</option>
+                    </select>
                 </div>
                 
                 <div class="control-group" id="svgOptions" style="display: none;">
@@ -631,7 +646,16 @@
         
         // Update range values
         colorsSlider.addEventListener('input', () => {
-            colorsValue.textContent = colorsSlider.value;
+            if (colorsSlider.value === '33') {
+                colorsValue.textContent = 'Unlimited';
+                colorsValue.style.color = '#059669';
+            } else if (colorsSlider.value === '1') {
+                colorsValue.textContent = '1 (Silhouette)';
+                colorsValue.style.color = '#16a34a';
+            } else {
+                colorsValue.textContent = colorsSlider.value;
+                colorsValue.style.color = '#16a34a';
+            }
         });
         
         thresholdSlider.addEventListener('input', () => {
@@ -649,6 +673,16 @@
                 rasterizeOptions.style.display = 'block';
             } else {
                 rasterizeOptions.style.display = 'none';
+            }
+        });
+        
+        // Show/hide denoise options
+        document.getElementById('denoise').addEventListener('change', (e) => {
+            const denoiseOptions = document.getElementById('denoiseOptions');
+            if (e.target.checked) {
+                denoiseOptions.style.display = 'block';
+            } else {
+                denoiseOptions.style.display = 'none';
             }
         });
         
@@ -911,11 +945,20 @@
             
             const formData = new FormData();
             formData.append('file', currentFile);
-            formData.append('colors', colorsSlider.value);
+            // Send 0 for unlimited colors
+            const colorValue = colorsSlider.value === '33' ? '0' : colorsSlider.value;
+            formData.append('colors', colorValue);
             formData.append('method', document.getElementById('method').value);
             formData.append('threshold', thresholdSlider.value);
             formData.append('simplify', document.getElementById('simplify').checked);
             formData.append('includeBackground', document.getElementById('includeBackground').checked);
+            
+            // Add denoise settings
+            const denoiseCheckbox = document.getElementById('denoise');
+            formData.append('denoise', denoiseCheckbox.checked);
+            if (denoiseCheckbox.checked) {
+                formData.append('denoiseStrength', document.getElementById('denoiseStrength').value);
+            }
             
             // Add gradient mode if it's an SVG file
             if (currentFile.name.toLowerCase().endsWith('.svg')) {
@@ -1048,7 +1091,8 @@
                 if (baseFilename.includes('.')) {
                     baseFilename = baseFilename.substring(0, baseFilename.lastIndexOf('.'));
                 }
-                a.download = `${baseFilename}_${colorsSlider.value}colors.svg`;
+                const colorSuffix = colorsSlider.value === '33' ? 'unlimited' : `${colorsSlider.value}colors`;
+                a.download = `${baseFilename}_${colorSuffix}.svg`;
                 
                 a.click();
                 URL.revokeObjectURL(url);

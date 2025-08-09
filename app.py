@@ -94,6 +94,8 @@ def convert():
     include_background = request.form.get('includeBackground', 'false') == 'true'
     gradient_mode = request.form.get('gradientMode', 'default')  # default, sample, remove, or rasterize
     raster_dpi = int(request.form.get('rasterDpi', 150))
+    denoise = request.form.get('denoise', 'false') == 'true'
+    denoise_strength = int(request.form.get('denoiseStrength', 3))
     
     # Get suggested colors if provided
     suggested_colors_json = request.form.get('suggestedColors', '[]')
@@ -168,7 +170,9 @@ def convert():
                             simplify=simplify,
                             threshold=threshold,
                             include_background=include_background,
-                            suggested_colors=suggested_colors_rgb
+                            suggested_colors=suggested_colors_rgb,
+                            denoise=denoise,
+                            denoise_strength=denoise_strength
                         )
                         
                         try:
@@ -209,9 +213,12 @@ def convert():
                             except:
                                 pass
                 else:
-                    yield f"data: {json.dumps({'type': 'status', 'message': 'Converting image to SVG...'})}\n\n"
-                    if suggested_colors_rgb:
-                        yield f"data: {json.dumps({'type': 'status', 'message': f'Using {len(suggested_colors_rgb)} suggested colors'})}\n\n"
+                    if n_colors == 0:
+                        yield f"data: {json.dumps({'type': 'status', 'message': 'Converting image to SVG with unlimited colors...'})}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'type': 'status', 'message': 'Converting image to SVG...'})}\n\n"
+                        if suggested_colors_rgb:
+                            yield f"data: {json.dumps({'type': 'status', 'message': f'Using {len(suggested_colors_rgb)} suggested colors'})}\n\n"
                     # Convert image to SVG
                     converter = ImageToSVGConverter(
                         n_colors=n_colors,
@@ -219,7 +226,9 @@ def convert():
                         simplify=simplify,
                         threshold=threshold,
                         include_background=include_background,
-                        suggested_colors=suggested_colors_rgb
+                        suggested_colors=suggested_colors_rgb,
+                        denoise=denoise,
+                        denoise_strength=denoise_strength
                     )
                     converter.convert(input_path, output_path)
                 
@@ -274,7 +283,11 @@ def download_svg():
             base_name = os.path.splitext(original_filename)[0]
         else:
             base_name = original_filename
-        download_filename = f"{base_name}_{n_colors}colors.svg"
+        
+        if n_colors == 0:
+            download_filename = f"{base_name}_unlimited.svg"
+        else:
+            download_filename = f"{base_name}_{n_colors}colors.svg"
         
         # Create temporary file for download
         with tempfile.NamedTemporaryFile(mode='w', suffix='.svg', delete=False, dir=TEMP_DIR) as tmp:
@@ -310,5 +323,13 @@ if __name__ == '__main__':
     os.makedirs('templates', exist_ok=True)
     
     # Run the app
-    # Bind to 0.0.0.0 to make it accessible from outside the container
-    app.run(host='0.0.0.0', debug=True, port=5000)
+    port = int(os.environ.get('PORT', 5000))
+    
+    # Simple startup message
+    print(f"Starting web server on http://0.0.0.0:{port}")
+    print("Press Ctrl+C to stop the server")
+    
+    # Use Waitress as the production WSGI server
+    # This avoids all the Werkzeug reloader issues
+    from waitress import serve
+    serve(app, host='0.0.0.0', port=port)

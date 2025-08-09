@@ -5,3 +5,4 @@ scipy>=1.7.0
 Flask>=2.0.0
 Werkzeug>=2.0.0
 cairosvg>=2.5.0  # Optional: for SVG rasterization (requires system cairo library)
+waitress>=2.1.0  # Production WSGI server

@@ -35,9 +35,12 @@ RUN mkdir -p /app/output /app/input /app/temp
 # Expose port for web server (using 5000 as configured in app.py)
 EXPOSE 5000
 
-# Set environment variable
+# Set environment variables for production
 ENV FLASK_APP=app.py
 ENV PYTHONUNBUFFERED=1
+ENV FLASK_ENV=production
+ENV WERKZEUG_RUN_MAIN=true
+ENV PYTHONDONTWRITEBYTECODE=1
 
 # Default command runs the web server
 CMD ["python", "app.py"]

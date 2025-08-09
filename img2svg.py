@@ -9,9 +9,10 @@ import sys
 import os
 import re
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageFilter
 import numpy as np
 from sklearn.cluster import KMeans
+from scipy.ndimage import median_filter
 # potrace is called via subprocess instead of Python bindings
 import tempfile
 import subprocess
@@ -21,7 +22,7 @@ import xml.etree.ElementTree as ET
 class ImageToSVGConverter:
     """Main converter class for image to printable SVG conversion."""
     
-    def __init__(self, n_colors=8, method='kmeans', simplify=True, threshold=128, include_background=False, suggested_colors=None):
+    def __init__(self, n_colors=8, method='kmeans', simplify=True, threshold=128, include_background=False, suggested_colors=None, denoise=False, denoise_strength=3):
         self.n_colors = n_colors
         self.method = method
         self.simplify = simplify
@@ -29,6 +30,9 @@ class ImageToSVGConverter:
         self.include_background = include_background
         self.suggested_colors = suggested_colors  # List of (R, G, B) tuples
         self.palette = None
+        self.unlimited_colors = (n_colors == 0)
+        self.denoise = denoise
+        self.denoise_strength = denoise_strength
     
     def convert(self, input_path, output_path):
         """
@@ -45,9 +49,20 @@ class ImageToSVGConverter:
         if image.mode != 'RGB':
             image = image.convert('RGB')
         
-        # Reduce colors
-        print(f"Reducing to {self.n_colors} colors using {self.method} method...")
-        quantized_image = self.quantize_image(image)
+        # Apply denoising if requested
+        if self.denoise:
+            print(f"Applying denoising (strength: {self.denoise_strength})...")
+            image = self.denoise_image(image)
+        
+        # Reduce colors (unless unlimited)
+        if self.unlimited_colors:
+            print(f"Processing with unlimited colors...")
+            # For unlimited colors, apply smart color reduction to merge very similar colors
+            # This prevents having tens of thousands of nearly identical colors
+            quantized_image = self.smart_color_reduction(image)
+        else:
+            print(f"Reducing to {self.n_colors} colors using {self.method} method...")
+            quantized_image = self.quantize_image(image)
         
         # Convert to SVG
         print("Converting to SVG...")
@@ -60,6 +75,91 @@ class ImageToSVGConverter:
         print(f"SVG saved to {output_path}")
         return output_path
     
+    def denoise_image(self, image):
+        """Apply denoising to reduce artifacts and noise in the image."""
+        # Convert to numpy array
+        img_array = np.array(image)
+        
+        # Apply median filter to each channel
+        if self.denoise_strength > 0:
+            # Use scipy's median filter for better control
+            for i in range(3):  # RGB channels
+                img_array[:, :, i] = median_filter(img_array[:, :, i], size=self.denoise_strength)
+        
+        # Also apply a slight Gaussian blur to smooth out remaining noise
+        denoised = Image.fromarray(img_array)
+        if self.denoise_strength > 1:
+            denoised = denoised.filter(ImageFilter.GaussianBlur(radius=0.5))
+        
+        return denoised
+    
+    def smart_color_reduction(self, image, tolerance=8):
+        """Reduce colors by merging very similar ones. Used for unlimited colors mode.
+        
+        Args:
+            image: PIL Image
+            tolerance: Color difference threshold for merging (0-255)
+        """
+        # Convert to numpy array
+        img_array = np.array(image)
+        original_shape = img_array.shape
+        pixels = img_array.reshape(-1, 3)
+        
+        # Get unique colors and their counts
+        unique_colors, inverse_indices, counts = np.unique(
+            pixels, axis=0, return_inverse=True, return_counts=True
+        )
+        
+        print(f"  Found {len(unique_colors)} unique colors")
+        
+        # If we have a reasonable number of colors, just return as-is
+        if len(unique_colors) <= 1000:
+            print(f"  Using all {len(unique_colors)} colors")
+            return image
+        
+        # Otherwise, merge similar colors
+        print(f"  Merging similar colors (tolerance: {tolerance})...")
+        
+        # Sort colors by frequency (most common first)
+        sorted_indices = np.argsort(counts)[::-1]
+        sorted_colors = unique_colors[sorted_indices]
+        sorted_counts = counts[sorted_indices]
+        
+        # Build merged color palette
+        merged_colors = []
+        color_mapping = {}
+        
+        for i, color in enumerate(sorted_colors):
+            # Check if this color is similar to any in merged_colors
+            merged = False
+            for j, merged_color in enumerate(merged_colors):
+                # Calculate color distance
+                diff = np.abs(color.astype(int) - merged_color.astype(int))
+                if np.max(diff) <= tolerance:
+                    # Map this color to the existing merged color
+                    color_mapping[tuple(color)] = j
+                    merged = True
+                    break
+            
+            if not merged:
+                # Add as new color
+                color_mapping[tuple(color)] = len(merged_colors)
+                merged_colors.append(color)
+        
+        merged_colors = np.array(merged_colors)
+        print(f"  Reduced to {len(merged_colors)} colors")
+        
+        # Map pixels to merged colors
+        new_pixels = np.zeros_like(pixels)
+        for i, color in enumerate(unique_colors):
+            mask = inverse_indices == i
+            merged_idx = color_mapping[tuple(color)]
+            new_pixels[mask] = merged_colors[merged_idx]
+        
+        # Reshape and return
+        new_array = new_pixels.reshape(original_shape)
+        return Image.fromarray(new_array.astype(np.uint8))
+    
     def quantize_image(self, image):
         """Reduce the number of colors in an image."""
         # Convert to numpy array
@@ -70,8 +170,14 @@ class ImageToSVGConverter:
         pixels = img_array.reshape(-1, 3)
         
         if self.method == 'kmeans':
+            # Handle single color (silhouette)
+            if self.n_colors == 1:
+                # For silhouette, use the average color
+                mean_color = np.mean(pixels, axis=0).astype(int)
+                self.palette = np.array([mean_color])
+                quantized_pixels = np.full_like(pixels, mean_color)
             # Use k-means clustering
-            if self.suggested_colors and len(self.suggested_colors) > 0:
+            elif self.suggested_colors and len(self.suggested_colors) > 0:
                 # If we have suggested colors, use them as initial centers
                 n_suggested = min(len(self.suggested_colors), self.n_colors)
                 n_remaining = self.n_colors - n_suggested
@@ -108,23 +214,29 @@ class ImageToSVGConverter:
             
         elif self.method == 'posterize':
             # Simple posterization
-            levels = max(2, int((256 / self.n_colors) ** (1/3)))
-            factor = 256 // levels
-            quantized_pixels = (pixels // factor) * factor
-            
-            # Extract unique colors as palette
-            unique_colors = np.unique(quantized_pixels, axis=0)
-            if len(unique_colors) > self.n_colors:
-                # Use k-means to reduce further
-                kmeans = KMeans(n_clusters=self.n_colors, random_state=42, n_init=10)
-                kmeans.fit(unique_colors)
-                self.palette = kmeans.cluster_centers_.astype(int)
-                
-                # Map colors to palette
-                labels = kmeans.predict(quantized_pixels)
-                quantized_pixels = self.palette[labels]
+            # For 1 color, just make everything the same
+            if self.n_colors == 1:
+                mean_color = np.mean(pixels, axis=0).astype(int)
+                quantized_pixels = np.full_like(pixels, mean_color)
+                self.palette = np.array([mean_color])
             else:
-                self.palette = unique_colors
+                levels = max(2, int((256 / self.n_colors) ** (1/3)))
+                factor = 256 // levels
+                quantized_pixels = (pixels // factor) * factor
+                
+                # Extract unique colors as palette
+                unique_colors = np.unique(quantized_pixels, axis=0)
+                if len(unique_colors) > self.n_colors:
+                    # Use k-means to reduce further
+                    kmeans = KMeans(n_clusters=self.n_colors, random_state=42, n_init=10)
+                    kmeans.fit(unique_colors)
+                    self.palette = kmeans.cluster_centers_.astype(int)
+                    
+                    # Map colors to palette
+                    labels = kmeans.predict(quantized_pixels)
+                    quantized_pixels = self.palette[labels]
+                else:
+                    self.palette = unique_colors
         
         elif self.method == 'adaptive':
             # Adaptive palette using PIL's quantize
@@ -209,12 +321,19 @@ class ImageToSVGConverter:
         
         print(f"Processing {len(unique_colors)} unique colors...")
         
+        # Only show detailed progress for reasonable number of colors
+        show_progress = len(unique_colors) <= 100
+        
         for i, color in enumerate(unique_colors):
-            print(f"  Processing color {i+1}/{len(unique_colors)}: RGB{tuple(color)}")
+            if show_progress:
+                print(f"  Processing color {i+1}/{len(unique_colors)}: RGB{tuple(color)}")
+            elif i % 1000 == 0:  # Show progress every 1000 colors for unlimited mode
+                print(f"  Processing colors... {i}/{len(unique_colors)} ({i*100//len(unique_colors)}%)")
             
             # Skip pure black (background) if not including background
             if not self.include_background and np.array_equal(color, [0, 0, 0]):
-                print("    Skipping black background")
+                if show_progress:
+                    print("    Skipping black background")
                 continue
             
             # Create binary mask for this color
@@ -704,7 +823,7 @@ def main():
     parser.add_argument('output', nargs='?', help='Output SVG file (default: input_Ncolors.svg)')
     parser.add_argument(
         '-c', '--colors', type=int, default=8,
-        help='Number of colors in palette (default: 8)'
+        help='Number of colors in palette (default: 8, 0 for unlimited)'
     )
     parser.add_argument(
         '-m', '--method', 
@@ -748,6 +867,14 @@ def main():
         '--include-background', action='store_true',
         help='Include black background in output (default: skip black background)'
     )
+    parser.add_argument(
+        '--denoise', action='store_true',
+        help='Apply denoising to reduce artifacts (good for AI-generated images)'
+    )
+    parser.add_argument(
+        '--denoise-strength', type=int, default=3, choices=[1, 3, 5, 7],
+        help='Denoising strength (1=light, 3=medium, 5=strong, 7=very strong, default: 3)'
+    )
     
     args = parser.parse_args()
     
@@ -757,8 +884,11 @@ def main():
     if args.output:
         output_path = Path(args.output)
     else:
-        # Create output filename like "input_8colors.svg"
-        output_path = input_path.parent / f"{input_path.stem}_{args.colors}colors.svg"
+        # Create output filename like "input_8colors.svg" or "input_unlimited.svg"
+        if args.colors == 0:
+            output_path = input_path.parent / f"{input_path.stem}_unlimited.svg"
+        else:
+            output_path = input_path.parent / f"{input_path.stem}_{args.colors}colors.svg"
         print(f"Output file: {output_path}")
     
     if not input_path.exists():
@@ -788,7 +918,9 @@ def main():
                 method=args.method,
                 simplify=not args.no_simplify,
                 threshold=args.threshold,
-                include_background=args.include_background
+                include_background=args.include_background,
+                denoise=args.denoise,
+                denoise_strength=args.denoise_strength
             )
             
             # Save rasterized image to temp file for processing
@@ -833,7 +965,9 @@ def main():
             method=args.method,
             simplify=not args.no_simplify,
             threshold=args.threshold,
-            include_background=args.include_background
+            include_background=args.include_background,
+            denoise=args.denoise,
+            denoise_strength=args.denoise_strength
         )
         converter.convert(input_path, output_path)
     
